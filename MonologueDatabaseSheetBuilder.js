@@ -1,5 +1,5 @@
 /*
- * MONOLOGUE DATABASE SHEET BUILDER â€” FULL FIXED VERSION
+ * MONOLOGUE DATABASE SHEET BUILDER — FULL FIXED VERSION
  *
  * Database tabs use A:H:
  * A Playwright | B Play / Mono Link | C Character | D First Line
@@ -252,7 +252,7 @@ function importManualEntries() {
       if (
         priorStatus === 'Imported' ||
         priorStatus === 'Merged into duplicate' ||
-        priorStatus === 'Duplicate â€” no new E:H data'
+        priorStatus === 'Duplicate — no new E:H data'
       ) {
         totals.alreadyHandled++;
         continue;
@@ -262,14 +262,14 @@ function importManualEntries() {
         setManualStatus_(
           manualSheet,
           sourceRow,
-          'Needs review â€” complete Playwright, Character, and First Line'
+          'Needs review — complete Playwright, Character, and First Line'
         );
         totals.review++;
         continue;
       }
 
       if (categoryName === '') {
-        setManualStatus_(manualSheet, sourceRow, 'Needs review â€” add Category');
+        setManualStatus_(manualSheet, sourceRow, 'Needs review — add Category');
         totals.review++;
         continue;
       }
@@ -278,7 +278,7 @@ function importManualEntries() {
         const targetSheet = ss.getSheetByName(categoryName);
         if (!targetSheet) {
           categoryStates.set(categoryName, {
-            error: 'Needs review â€” category tab not found'
+            error: 'Needs review — category tab not found'
           });
         } else {
           ensureDatabaseHeaders_(targetSheet);
@@ -303,7 +303,7 @@ function importManualEntries() {
         setManualStatus_(
           manualSheet,
           sourceRow,
-          'Needs review â€” multiple duplicate matches'
+          'Needs review — multiple duplicate matches'
         );
         totals.review++;
         continue;
@@ -322,7 +322,7 @@ function importManualEntries() {
           setManualStatus_(manualSheet, sourceRow, 'Merged into duplicate');
           totals.merged++;
         } else {
-          setManualStatus_(manualSheet, sourceRow, 'Duplicate â€” no new E:H data');
+          setManualStatus_(manualSheet, sourceRow, 'Duplicate — no new E:H data');
           totals.duplicateNoNewData++;
         }
         continue;
@@ -475,9 +475,9 @@ function makeLikelyDuplicateFingerprint_(row) {
  * It keeps word boundaries based on whitespace first, so contractions
  * remain one word:
  *
- * "Iâ€™m"       â†’ one word
- * "don't"     â†’ one word
- * "youâ€™re"    â†’ one word
+ * "I’m"       → one word
+ * "don't"     → one word
+ * "you’re"    → one word
  *
  * It ignores punctuation only after the words have been selected.
  *
@@ -525,9 +525,9 @@ function normalizeForMatch_(value) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[â€œâ€]/g, '"')
-    .replace(/[â€˜â€™]/g, "'")
-    .replace(/â€¦/g, '...')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/…/g, '...')
     .replace(/[\u2010-\u2015]/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
@@ -769,7 +769,7 @@ function parseInlineUppercaseSpeakerWithoutColon_(text) {
    * ACTOR 4. I want to see the live Africa.
    */
   const periodMatch = line.match(
-    /^([A-Z][A-Z0-9'â€™()-]*(?:\s+[A-Z][A-Z0-9'â€™()-]*){0,3})\.\s+(.+)$/
+    /^([A-Z][A-Z0-9'’()-]*(?:\s+[A-Z][A-Z0-9'’()-]*){0,3})\.\s+(.+)$/
   );
 
   if (periodMatch) {
@@ -801,7 +801,7 @@ function parseInlineUppercaseSpeakerWithoutColon_(text) {
    * character, quote, or opening parenthesis.
    */
   const spaceMatch = line.match(
-    /^([A-Z][A-Z0-9'â€™()-]*(?:\s+[A-Z][A-Z0-9'â€™()-]*){0,3})\s+([A-Zâ€œ"'(].+)$/
+    /^([A-Z][A-Z0-9'’()-]*(?:\s+[A-Z][A-Z0-9'’()-]*){0,3})\s+([A-Z“"'(].+)$/
   );
 
   if (spaceMatch) {
@@ -894,8 +894,8 @@ function readMonologueHeader_(file) {
    *
    * Dirty Crusty
    * Clare Barron
-   * Dirty Crusty  â† ignored
-   * VICTOR        â† selected
+   * Dirty Crusty  ← ignored
+   * VICTOR        ← selected
    */
   const playKey = normalizeForMatch_(header.play);
   let startLine = null;
@@ -1212,7 +1212,7 @@ function collectSpokenTextFromParagraphs_(
        * Man
        * MAN: I wanted her car...
        *
-       * Keep the text after â€œMAN:â€.
+       * Keep the text after “MAN:”.
        */
       if (
         expectedCharacterKey !== '' &&
@@ -1383,7 +1383,7 @@ function extractInitialSpeakerCue_(text) {
     remainingText === '' ||
     candidate.length > 45 ||
     candidate.split(/\s+/).length > 5 ||
-    !/^[\p{L}\p{M}][\p{L}\p{M}.'â€™\-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'â€™\-]*)*(?:\s+#?\d+)?$/u
+    !/^[\p{L}\p{M}][\p{L}\p{M}.'’\-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'’\-]*)*(?:\s+#?\d+)?$/u
       .test(candidate)
   ) {
     return {
@@ -1432,7 +1432,7 @@ function isLikelySpeakerLabel_(text) {
    * "I said", "She said", "These are the facts".
    */
   if (
-    !/^[\p{Lu}][\p{Lu}\p{M}.'â€™\-]*(?:\s+[\p{Lu}][\p{Lu}\p{M}.'â€™\-]*)*(?:\s+#?\d+)?$/u
+    !/^[\p{Lu}][\p{Lu}\p{M}.'’\-]*(?:\s+[\p{Lu}][\p{Lu}\p{M}.'’\-]*)*(?:\s+#?\d+)?$/u
       .test(label)
   ) {
     return false;
@@ -1449,7 +1449,7 @@ function extractUppercaseCueWithoutColon_(text) {
    * remaining dialogue.
    */
   const match = normalized.match(
-    /^((?:[\p{Lu}\p{M}][\p{Lu}\p{M}.'â€™-]*\s+){0,5}[\p{Lu}\p{M}][\p{Lu}\p{M}.'â€™-]*(?:\s+\d+)?)\s+(.+)$/u
+    /^((?:[\p{Lu}\p{M}][\p{Lu}\p{M}.'’-]*\s+){0,5}[\p{Lu}\p{M}][\p{Lu}\p{M}.'’-]*(?:\s+\d+)?)\s+(.+)$/u
   );
 
   if (!match) {
@@ -1506,7 +1506,7 @@ function isValidCharacterLabel_(text) {
    * 12
    * A normal multiword dialogue sentence
    */
-  return /^[\p{L}\p{M}][\p{L}\p{M}.'â€™-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'â€™-]*)*(?:\s+#?\d+)?$/u
+  return /^[\p{L}\p{M}][\p{L}\p{M}.'’-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'’-]*)*(?:\s+#?\d+)?$/u
     .test(normalized);
 }
 
@@ -1583,11 +1583,11 @@ function characterLabelHasAtMostFiveWords_(text) {
    * Count whitespace-separated label words.
    *
    * Examples:
-   * "Riley"               â†’ 1
-   * "Young Man"           â†’ 2
-   * "ACTOR 4"             â†’ 2
-   * "Woman With Red Hat"  â†’ 4
-   * "Man, shut up..."     â†’ too many words â†’ false
+   * "Riley"               → 1
+   * "Young Man"           → 2
+   * "ACTOR 4"             → 2
+   * "Woman With Red Hat"  → 4
+   * "Man, shut up..."     → too many words → false
    */
   const wordCount = label.split(/\s+/).filter(function(word) {
     return word !== '';
@@ -1647,7 +1647,7 @@ function firstWordsWithEllipsis_(text) {
    * If the final included source word already ends in an ellipsis,
    * do not add another one.
    */
-  if (/(\.\.\.|â€¦)$/.test(excerpt)) {
+  if (/(\.\.\.|…)$/.test(excerpt)) {
     return excerpt;
   }
 
@@ -1771,8 +1771,8 @@ function cleanPlaywrightName_(text) {
   /*
    * Repair values already incorrectly inverted by an earlier script:
    *
-   * "Ferrentino, By Lindsey" â†’ "Ferrentino, Lindsey"
-   * "Silverman, By Jen"      â†’ "Silverman, Jen"
+   * "Ferrentino, By Lindsey" → "Ferrentino, Lindsey"
+   * "Silverman, By Jen"      → "Silverman, Jen"
    */
   cleaned = cleaned.replace(
     /^(.+?),\s*by\s+(.+)$/i,
@@ -1782,12 +1782,12 @@ function cleanPlaywrightName_(text) {
   /*
    * Normal source-credit cleanup:
    *
-   * "By Lindsey Ferrentino" â†’ "Lindsey Ferrentino"
-   * "Written by Jen Silverman" â†’ "Jen Silverman"
+   * "By Lindsey Ferrentino" → "Lindsey Ferrentino"
+   * "Written by Jen Silverman" → "Jen Silverman"
    */
   cleaned = cleaned
     .replace(
-      /^(?:written\s+by|playwright|author|by)\s*[:\-â€“â€”]?\s*/i,
+      /^(?:written\s+by|playwright|author|by)\s*[:\-–—]?\s*/i,
       ''
     )
     .trim();
@@ -1892,13 +1892,13 @@ function splitPlaywrightCredit_(credit) {
 /**
  * Formats one person only.
  *
- * "Jen Silverman"       â†’ "Silverman, Jen"
- * "Silverman, Jen"      â†’ "Silverman, Jen"
+ * "Jen Silverman"       → "Silverman, Jen"
+ * "Silverman, Jen"      → "Silverman, Jen"
  * "Jacobs-Jenkins, Branden" remains unchanged.
  */
 function formatOnePlaywrightName_(name) {
   const cleaned = normalizeText_(name)
-    .replace(/^(?:written\s+by|playwright|author|by)\s*[:\-â€“â€”]?\s*/i, '')
+    .replace(/^(?:written\s+by|playwright|author|by)\s*[:\-–—]?\s*/i, '')
     .trim();
 
   if (cleaned === '') {
@@ -2120,7 +2120,7 @@ function showCleanupPreviewOrApply_(ss, changes, dryRun, label, column) {
   const columnLetter = String.fromCharCode(64 + column);
   const previewLines = changes.slice(0, previewLimit).map(function(change) {
     return change.sheetName + '!' + columnLetter + change.row +
-      '\n  "' + change.original + '" â†’ "' + change.cleaned + '"';
+      '\n  "' + change.original + '" → "' + change.cleaned + '"';
   });
   const extraCount = changes.length - previewLines.length;
 
@@ -2131,7 +2131,7 @@ function showCleanupPreviewOrApply_(ss, changes, dryRun, label, column) {
       label.toUpperCase() + ' CLEANUP PREVIEW\n\n' +
       'Cells that would change: ' + changes.length + '\n\n' +
       previewLines.join('\n\n') +
-      (extraCount > 0 ? '\n\nâ€¦and ' + extraCount + ' more.' : '') +
+      (extraCount > 0 ? '\n\n…and ' + extraCount + ' more.' : '') +
       '\n\nNo cells were changed.'
     );
     return;
@@ -2189,7 +2189,7 @@ function cleanExistingCharacterName_(value) {
 
 function removeQuotationMarksFromFirstLine_(value) {
   return cleanText_(value)
-    .replace(/["â€œâ€â€žâ€ŸÂ«Â»â€¹â€ºâ€˜â€™â€šâ€›`Â´]/g, '')
+    .replace(/["“”„‟«»‹›‘’‚‛`´]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -2360,7 +2360,7 @@ function executeDuplicateRemovalPlan_(plan, dryRun, label) {
       }).join('; ');
       const mergeText = item.mergeSources.length > 0
         ? '\n  Fill keeper blanks: ' + item.mergeSources.map(function(source) {
-            return 'from row ' + source.sourceRow + ' â†’ ' + source.filledColumns.join(',');
+            return 'from row ' + source.sourceRow + ' → ' + source.filledColumns.join(',');
           }).join('; ')
         : '';
 
@@ -2380,7 +2380,7 @@ function executeDuplicateRemovalPlan_(plan, dryRun, label) {
         'Rows that would be removed: ' + rowsToRemove + '\n\n' +
         previewLines.join('\n\n') +
         (plan.length > previewLimit
-          ? '\n\nâ€¦and ' + (plan.length - previewLimit) + ' more duplicate groups.'
+          ? '\n\n…and ' + (plan.length - previewLimit) + ' more duplicate groups.'
           : '') +
         '\n\nNo rows or cells were changed.\n\n' +
         'The row with the most filled A:H cells is kept; ties keep the topmost row.'
@@ -2692,7 +2692,7 @@ function getSourceDatabaseDifferences_(targetRecord, sourceRecord) {
 
 function normalizeSourceReviewPlaywright_(value) {
   return normalizeSourceReviewGeneric_(value)
-    .replace(/^(?:written\s+by|playwright|author|by)\b\s*[:\-â€“â€”,]*\s*/i, '')
+    .replace(/^(?:written\s+by|playwright|author|by)\b\s*[:\-–—,]*\s*/i, '')
     .trim();
 }
 
@@ -2712,9 +2712,9 @@ function normalizeSourceReviewGeneric_(value) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[â€œâ€]/g, '"')
-    .replace(/[â€˜â€™]/g, "'")
-    .replace(/â€¦/g, '...')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/…/g, '...')
     .replace(/[\u2010-\u2015]/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
@@ -2878,8 +2878,8 @@ function diagnoseGoogleDocLayout() {
     SpreadsheetApp.getUi().alert(
       'Could not find a valid Google Doc ID.\\n\\n' +
       'Paste either:\\n' +
-      'â€¢ the whole Google Docs URL, or\\n' +
-      'â€¢ only the ID between /d/ and /edit.'
+      '• the whole Google Docs URL, or\\n' +
+      '• only the ID between /d/ and /edit.'
     );
     return;
   }
@@ -3774,8 +3774,8 @@ function normalizePlayTitleForReview_(title) {
   return cleanText(title)
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[â€™â€˜]/g, "'")
-    .replace(/[â€œâ€]/g, '"')
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
@@ -4295,8 +4295,8 @@ function normalizeReviewTitle_(value) {
   return String(value == null ? '' : value)
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[â€˜â€™]/g, "'")
-    .replace(/[â€œâ€]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
@@ -4310,7 +4310,7 @@ function describeReviewRow_(label, record) {
     label +
     ': ' +
     record.sheetName +
-    ' â€” spreadsheet row ' +
+    ' — spreadsheet row ' +
     record.rowNumber +
     '\n' +
     'Playwright: ' + String(row[0] || '') +
