@@ -51,11 +51,10 @@ function onOpen() {
     .addItem('Preview First Line quote cleanup', 'previewFirstLineQuoteCleanup')
     .addItem('Apply First Line quote cleanup', 'applyFirstLineQuoteCleanup')
     .addSeparator()
-    .addItem('Review matching play titles one at a time','reviewMatchingPlayTitles')
+    .addItem('Review matching play titles one at a time', 'reviewMatchingPlayTitles')
     .addItem('Preview exact duplicate removal', 'previewDatabaseDuplicateRemoval')
     .addItem('Apply exact duplicate removal', 'applyDatabaseDuplicateRemoval')
     .addItem('Preview likely duplicate removal', 'previewLikelyDuplicateRemoval')
-    .addItem('Review matching file/play names','reviewMatchingPlayTitles')
     .addItem('Apply likely duplicate removal', 'applyLikelyDuplicateRemoval')
     .addSeparator()
     .addItem('Build Source Changes Review', 'buildSourceChangesReview')
@@ -362,6 +361,34 @@ function importManualEntries() {
   }
 }
 
+function getDatabaseDataRows_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < CONFIG.DATA_START_ROW) {
+    return [];
+  }
+
+  return sheet
+    .getRange(
+      CONFIG.DATA_START_ROW,
+      1,
+      lastRow - CONFIG.DATA_START_ROW + 1,
+      CONFIG.DATABASE_COLUMN_COUNT
+    )
+    .getDisplayValues();
+}
+
+function getSheetColumnDisplayValues_(sheet, column) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < CONFIG.DATA_START_ROW) {
+    return [];
+  }
+
+  return sheet
+    .getRange(CONFIG.DATA_START_ROW, column, lastRow - CONFIG.DATA_START_ROW + 1, 1)
+    .getDisplayValues()
+    .flat();
+}
+
 function getDatabaseState_(sheet) {
   const lastRow = Math.max(sheet.getLastRow(), CONFIG.DATA_START_ROW - 1);
 
@@ -373,10 +400,7 @@ function getDatabaseState_(sheet) {
     };
   }
 
-  const rowCount = lastRow - CONFIG.DATA_START_ROW + 1;
-  const rows = sheet
-    .getRange(CONFIG.DATA_START_ROW, 1, rowCount, CONFIG.DATABASE_COLUMN_COUNT)
-    .getDisplayValues();
+  const rows = getDatabaseDataRows_(sheet);
 
   const fingerprintRows = new Map();
   const ambiguousFingerprints = new Set();
@@ -653,26 +677,35 @@ function validateFolderId_() {
 }
 
 function collectFilesRecursively_(folder, relativePath, filesToProcess) {
-  const currentPath = relativePath === '' ? folder.getName() : relativePath;
-  const files = folder.getFiles();
+  const stack = [{ folder: folder, relativePath: relativePath }];
 
-  while (files.hasNext()) {
-    const file = files.next();
-    const mimeType = file.getMimeType();
-    if (mimeType !== MimeType.GOOGLE_DOCS && mimeType !== MimeType.SHORTCUT) {
-      continue;
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const currentPath = current.relativePath === '' ? current.folder.getName() : current.relativePath;
+    const files = current.folder.getFiles();
+
+    while (files.hasNext()) {
+      const file = files.next();
+      const mimeType = file.getMimeType();
+      if (mimeType !== MimeType.GOOGLE_DOCS && mimeType !== MimeType.SHORTCUT) {
+        continue;
+      }
+      filesToProcess.push({ file: file, sourceFolder: currentPath });
     }
-    filesToProcess.push({ file: file, sourceFolder: currentPath });
-  }
 
-  const subfolders = folder.getFolders();
-  while (subfolders.hasNext()) {
-    const subfolder = subfolders.next();
-    collectFilesRecursively_(
-      subfolder,
-      currentPath + ' / ' + subfolder.getName(),
-      filesToProcess
-    );
+    const subfolders = current.folder.getFolders();
+    const nestedFolders = [];
+    while (subfolders.hasNext()) {
+      const subfolder = subfolders.next();
+      nestedFolders.push({
+        folder: subfolder,
+        relativePath: currentPath + ' / ' + subfolder.getName()
+      });
+    }
+
+    for (let index = nestedFolders.length - 1; index >= 0; index--) {
+      stack.push(nestedFolders[index]);
+    }
   }
 }
 
@@ -681,11 +714,13 @@ function resolveGoogleDocFile_(file) {
     return null;
   }
 
-  if (file.getMimeType() === MimeType.GOOGLE_DOCS) {
+  const mimeType = file.getMimeType();
+
+  if (mimeType === MimeType.GOOGLE_DOCS) {
     return file;
   }
 
-  if (file.getMimeType() === MimeType.SHORTCUT) {
+  if (mimeType === MimeType.SHORTCUT) {
     try {
       const targetId = file.getTargetId();
       if (!targetId) {
@@ -1153,6 +1188,7 @@ function collectSpokenTextFromParagraphs_(
   expectedCharacter
 ) {
   let collected = cleanSpokenText_(initialText || '');
+  let collectedWordCount = countWords_(collected);
   const expectedCharacterKey = normalizeForMatch_(expectedCharacter || '');
 
   for (let i = startIndex; i < paragraphs.length; i++) {
@@ -1185,10 +1221,11 @@ function collectSpokenTextFromParagraphs_(
         const cueDialogue = cleanSpokenText_(nextCue.remainingText);
 
         if (cueDialogue !== '') {
+          collectedWordCount += countWords_(cueDialogue);
           collected = normalizeText_(collected + ' ' + cueDialogue);
         }
 
-        if (countWords_(collected) >= CONFIG.FIRST_LINE_WORD_COUNT) {
+        if (collectedWordCount >= CONFIG.FIRST_LINE_WORD_COUNT) {
           break;
         }
 
@@ -1211,9 +1248,10 @@ function collectSpokenTextFromParagraphs_(
       continue;
     }
 
+    collectedWordCount += countWords_(spokenPiece);
     collected = normalizeText_(collected + ' ' + spokenPiece);
 
-    if (countWords_(collected) >= CONFIG.FIRST_LINE_WORD_COUNT) {
+    if (collectedWordCount >= CONFIG.FIRST_LINE_WORD_COUNT) {
       break;
     }
   }
@@ -1310,55 +1348,6 @@ function extractSpeakerCue_(text) {
   return {
     found: true,
     character: cleanCharacterLabel_(candidateLabel),
-    remainingText: remainingText,
-    endIndex: colonIndex + 1
-  };
-}
-
-function extractInitialSpeakerCue_(text) {
-  const normalized = normalizeText_(text);
-  const colonIndex = normalized.indexOf(':');
-
-  if (colonIndex <= 0 || colonIndex > 45) {
-    return {
-      found: false,
-      character: '',
-      remainingText: normalized,
-      endIndex: 0
-    };
-  }
-
-  const candidate = cleanCharacterLabel_(
-    normalized.substring(0, colonIndex)
-  );
-
-  const remainingText = normalizeText_(
-    normalized.substring(colonIndex + 1)
-  );
-
-  /*
-   * Used only on the first character/dialogue line. Therefore title-case
-   * labels such as Robbie and Young Man are valid.
-   */
-  if (
-    candidate === '' ||
-    remainingText === '' ||
-    candidate.length > 45 ||
-    candidate.split(/\s+/).length > 5 ||
-    !/^[\p{L}\p{M}][\p{L}\p{M}.'â€™\-]*(?:\s+[\p{L}\p{M}][\p{L}\p{M}.'â€™\-]*)*(?:\s+#?\d+)?$/u
-      .test(candidate)
-  ) {
-    return {
-      found: false,
-      character: '',
-      remainingText: normalized,
-      endIndex: 0
-    };
-  }
-
-  return {
-    found: true,
-    character: candidate,
     remainingText: remainingText,
     endIndex: colonIndex + 1
   };
@@ -1614,9 +1603,7 @@ function cleanSpokenText_(text) {
     let previous;
     do {
       previous = cleaned;
-      cleaned = cleaned
-        .replace(/\([^()]*\)/g, ' ')
-        .replace(/\[[^\[\]]*\]/g, ' ');
+      cleaned = cleaned.replace(/(?:\([^()]*\)|\[[^\[\]]*\])/g, ' ');
     } while (cleaned !== previous);
   }
 
@@ -1673,13 +1660,13 @@ function countWords_(text) {
 
 function parseHeader_(lines) {
   const firstLine = normalizeText_(lines[0] || '');
-  const secondLine = normalizeText_(lines[1] || '');
-
   if (firstLine === '') {
     return { play: '', playwright: '', nextLineIndex: 0 };
   }
 
+  const secondLine = normalizeText_(lines[1] || '');
   const knownException = getKnownPlayHeaderException_(firstLine);
+
   if (knownException.isMatch) {
     return {
       play: knownException.play,
@@ -1737,14 +1724,40 @@ function parseHeader_(lines) {
 
 function removeLeadingLabel_(text, labels) {
   const normalized = normalizeText_(text);
+  if (normalized === '') {
+    return { wasLabeled: false, text: '' };
+  }
+
+  const lower = normalized.toLowerCase();
 
   for (let i = 0; i < labels.length; i++) {
-    const pattern = new RegExp(
-      '^\\s*' + escapeRegExp_(labels[i]) + '\\s*[:\\-]\\s*',
-      'i'
-    );
-    if (pattern.test(normalized)) {
-      return { wasLabeled: true, text: normalized.replace(pattern, '').trim() };
+    const label = labels[i].toLowerCase();
+    const labelLength = label.length;
+    const prefixPatterns = [
+      label + ':',
+      label + ' :',
+      label + '-',
+      label + ' -'
+    ];
+
+    for (let j = 0; j < prefixPatterns.length; j++) {
+      const prefix = prefixPatterns[j];
+      if (lower.indexOf(prefix) === 0) {
+        return {
+          wasLabeled: true,
+          text: normalized.substring(prefix.length).replace(/^\s+/, '').trim()
+        };
+      }
+    }
+
+    if (lower.indexOf(label + ' ') === 0) {
+      const remainder = normalized.substring(labelLength).replace(/^\s+/, '');
+      if (/^[\-:]/.test(remainder)) {
+        return {
+          wasLabeled: true,
+          text: remainder.replace(/^[\-:]/, '').trim()
+        };
+      }
     }
   }
 
@@ -2016,7 +2029,7 @@ function applyPlaywrightCleanup() {
 
 function runPlaywrightCleanup_(dryRun) {
   const ss = getDestinationSpreadsheet_();
-  const databaseSheets = ss.getSheets().filter(isMonologueDatabaseSheet_);
+  const databaseSheets = getMonologueDatabaseSheets_(ss);
   const changes = collectColumnCleanupChanges_(databaseSheets, 1, cleanPlaywrightName_);
   showCleanupPreviewOrApply_(ss, changes, dryRun, 'Playwright', 1);
 }
@@ -2034,7 +2047,7 @@ function runCharacterCleanup_(dryRun) {
   lock.waitLock(30000);
   try {
     const ss = getDestinationSpreadsheet_();
-    const databaseSheets = ss.getSheets().filter(isMonologueDatabaseSheet_);
+    const databaseSheets = getMonologueDatabaseSheets_(ss);
     const changes = collectColumnCleanupChanges_(databaseSheets, 3, cleanExistingCharacterName_);
     showCleanupPreviewOrApply_(ss, changes, dryRun, 'Character', 3);
   } finally {
@@ -2055,7 +2068,7 @@ function runFirstLineQuoteCleanup_(dryRun) {
   lock.waitLock(30000);
   try {
     const ss = getDestinationSpreadsheet_();
-    const databaseSheets = ss.getSheets().filter(isMonologueDatabaseSheet_);
+    const databaseSheets = getMonologueDatabaseSheets_(ss);
     const changes = collectColumnCleanupChanges_(
       databaseSheets,
       4,
@@ -2071,15 +2084,10 @@ function collectColumnCleanupChanges_(databaseSheets, column, cleaner) {
   const changes = [];
 
   databaseSheets.forEach(function(sheet) {
-    const lastRow = sheet.getLastRow();
-    if (lastRow < CONFIG.DATA_START_ROW) {
+    const values = getSheetColumnDisplayValues_(sheet, column);
+    if (values.length === 0) {
       return;
     }
-
-    const values = sheet
-      .getRange(CONFIG.DATA_START_ROW, column, lastRow - CONFIG.DATA_START_ROW + 1, 1)
-      .getDisplayValues()
-      .flat();
 
     values.forEach(function(value, index) {
       const original = cleanText_(value);
@@ -2129,11 +2137,30 @@ function showCleanupPreviewOrApply_(ss, changes, dryRun, label, column) {
     return;
   }
 
+  const updatesBySheet = {};
   changes.forEach(function(change) {
-    ss.getSheetByName(change.sheetName).getRange(change.row, column).setValue(change.cleaned);
+    if (!updatesBySheet[change.sheetName]) {
+      updatesBySheet[change.sheetName] = [];
+    }
+    updatesBySheet[change.sheetName].push({
+      row: change.row,
+      value: change.cleaned
+    });
   });
+
+  Object.keys(updatesBySheet).forEach(function(sheetName) {
+    const sheet = ss.getSheetByName(sheetName);
+    updatesBySheet[sheetName].forEach(function(update) {
+      sheet.getRange(update.row, column).setValue(update.value);
+    });
+  });
+
   SpreadsheetApp.flush();
   showMessage_(label + ' cleanup complete.\n\nUpdated cells: ' + changes.length);
+}
+
+function getMonologueDatabaseSheets_(ss) {
+  return ss.getSheets().filter(isMonologueDatabaseSheet_);
 }
 
 function isMonologueDatabaseSheet_(sheet) {
@@ -2176,7 +2203,7 @@ function applyDatabaseDuplicateRemoval() {
 }
 
 function runExactDuplicateRemoval_(dryRun) {
-  const databaseSheets = getDestinationSpreadsheet_().getSheets().filter(isMonologueDatabaseSheet_);
+  const databaseSheets = getMonologueDatabaseSheets_(getDestinationSpreadsheet_());
   const plan = buildDuplicateRemovalPlan_(databaseSheets, 6, 'Exact: same Playwright + Character + first 6 First Line words');
   executeDuplicateRemovalPlan_(plan, dryRun, 'EXACT DUPLICATE');
 }
@@ -2190,7 +2217,7 @@ function applyLikelyDuplicateRemoval() {
 }
 
 function runLikelyDuplicateRemoval_(dryRun) {
-  const databaseSheets = getDestinationSpreadsheet_().getSheets().filter(isMonologueDatabaseSheet_);
+  const databaseSheets = getMonologueDatabaseSheets_(getDestinationSpreadsheet_());
   const exactPlan = buildDuplicateRemovalPlan_(
     databaseSheets,
     3,
@@ -2218,25 +2245,17 @@ function buildDuplicateRemovalPlan_(databaseSheets, wordCount, matchType, exclud
   const excluded = excludedRowKeys || new Set();
 
   databaseSheets.forEach(function(sheet) {
-    const lastRow = sheet.getLastRow();
-    if (lastRow < CONFIG.DATA_START_ROW) {
+    const sheetName = sheet.getName();
+    const rows = getDatabaseDataRows_(sheet);
+    if (rows.length === 0) {
       return;
     }
-
-    const rows = sheet
-      .getRange(
-        CONFIG.DATA_START_ROW,
-        1,
-        lastRow - CONFIG.DATA_START_ROW + 1,
-        CONFIG.DATABASE_COLUMN_COUNT
-      )
-      .getDisplayValues();
 
     const groups = new Map();
     rows.forEach(function(row, index) {
       const rowNumber = CONFIG.DATA_START_ROW + index;
       if (
-        excluded.has(sheet.getName() + '|' + rowNumber) ||
+        excluded.has(sheetName + '|' + rowNumber) ||
         !rowHasContent_(row) ||
         !hasRequiredIdentityFields_(row)
       ) {
@@ -2263,7 +2282,7 @@ function buildDuplicateRemovalPlan_(databaseSheets, wordCount, matchType, exclud
       if (group.length < 2) {
         return;
       }
-      plan.push(makeDuplicatePlanItem_(sheet.getName(), matchType, fingerprint, group));
+      plan.push(makeDuplicatePlanItem_(sheetName, matchType, fingerprint, group));
     });
   });
 
