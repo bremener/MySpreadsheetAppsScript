@@ -3434,154 +3434,6 @@ function writeFolderDatabaseInventorySheet_(
 }
 
 /*
- * INTERACTIVE PLAY-TITLE DUPLICATE REVIEW
- *
- * Matches database rows by the displayed value in Column B:
- * Play Mono Link.
- *
- * It asks, pair by pair:
- * 1. Are these actually duplicates?
- * 2. If yes, which row should be kept?
- *
- * Before deleting, it copies only missing E:H values from the
- * deleted row into blank E:H cells in the kept row.
- *
- * It never changes rows unless you explicitly choose Delete row 1
- * or Delete row 2 for that exact pair.
- */
-
-function reviewMatchingPlayTitles() {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-
-  try {
-    const ss = getDestinationSpreadsheet();
-    const ui = SpreadsheetApp.getUi();
-
-   const activeSheet = ss.getActiveSheet();
-
-const sheets = [activeSheet];
-    
-
-    const candidates = findMatchingPlayTitlePairs_(sheets);
-
-    if (candidates.length === 0) {
-      ui.alert(
-        'Matching-title review complete',
-        'No matching Play Mono Link titles were found.',
-        ui.ButtonSet.OK
-      );
-      return;
-    }
-
-    let reviewed = 0;
-    let deleted = 0;
-    let skipped = 0;
-    let canceled = false;
-
-    for (let i = 0; i < candidates.length; i++) {
-      const pair = candidates[i];
-
-      /*
-       * Row numbers can change after earlier deletions.
-       * Re-find both rows from their stable full-row signatures
-       * before showing or changing the pair.
-       */
-      const currentPair = findCurrentTitlePair_(ss, pair);
-
-      if (!currentPair) {
-        continue;
-      }
-
-      reviewed++;
-
-      const description =
-        'Possible matching play title (' +
-        reviewed +
-        ' of ' +
-        candidates.length +
-        ')\n\n' +
-        'Normalized title:\n' +
-        currentPair.title +
-        '\n\n' +
-        formatPlayTitleCandidate_('ROW 1', currentPair.first) +
-        '\n\n' +
-        formatPlayTitleCandidate_('ROW 2', currentPair.second) +
-        '\n\n' +
-        'Are these two rows duplicates of the same monologue entry?';
-
-      const isDuplicate = ui.alert(
-        'Review matching play titles',
-        description,
-        ui.ButtonSet.YES_NO_CANCEL
-      );
-
-      if (isDuplicate === ui.Button.CANCEL) {
-        canceled = true;
-        break;
-      }
-
-      if (isDuplicate === ui.Button.NO) {
-        skipped++;
-        continue;
-      }
-
-      const keepChoice = ui.alert(
-        'Choose the row to keep',
-        'Keep Row 1, delete Row 2?\n\n' +
-          'YES = Keep Row 1 / Delete Row 2\n' +
-          'NO = Keep Row 2 / Delete Row 1\n' +
-          'CANCEL = Do not delete either row',
-        ui.ButtonSet.YES_NO_CANCEL
-      );
-
-      if (keepChoice === ui.Button.CANCEL) {
-        skipped++;
-        continue;
-      }
-
-      const keep = keepChoice === ui.Button.YES
-        ? currentPair.first
-        : currentPair.second;
-
-      const remove = keepChoice === ui.Button.YES
-        ? currentPair.second
-        : currentPair.first;
-
-      /*
-       * Preserve database annotations:
-       * only fill blank E:H cells in the kept row.
-       */
-      mergeMissingDuplicateRowData_(
-        keep.sheet,
-        remove.rowNumber,
-        keep.rowNumber
-      );
-
-      keep.sheet.deleteRow(remove.rowNumber);
-      deleted++;
-    }
-
-    SpreadsheetApp.flush();
-
-    ui.alert(
-      'Matching-title review complete',
-      'Pairs reviewed: ' + reviewed +
-      '\nRows deleted: ' + deleted +
-      '\nPairs skipped: ' + skipped +
-      (canceled
-        ? '\n\nReview stopped early. You can run it again later.'
-        : ''),
-      ui.ButtonSet.OK
-    );
-
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-
-/*
  * Finds every pair of rows in the same database tab whose Column B
  * displayed values normalize to the same title.
  *
@@ -3873,6 +3725,17 @@ function isMonologueDatabaseSheet(sheet) {
  */
 
 function reviewMatchingPlayTitles() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    reviewMatchingPlayTitlesLocked_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function reviewMatchingPlayTitlesLocked_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const ui = SpreadsheetApp.getUi();
 
@@ -4051,51 +3914,29 @@ function isReviewDatabaseTab_(sheet) {
     return false;
   }
 
-  const lastColumn = sheet.getLastColumn();
-
-  if (lastColumn === 0) {
+  if (sheet.getLastColumn() < 8) {
     return false;
   }
 
   const headers = sheet
-    .getRange(1, 1, 1, lastColumn)
+    .getRange(1, 1, 1, 8)
     .getDisplayValues()[0]
     .map(normalizeTabLabel_);
 
-  const hasPlaywright = hasAnyHeader_(headers, [
-    'playwright',
-    'author',
-    'writer'
-  ]);
+  const allowedHeadersByColumn = [
+    ['playwright', 'author', 'writer'],
+    ['play mono link', 'playmonolink', 'file play name', 'file name', 'play name', 'title', 'play title'],
+    ['character', 'character name'],
+    ['first line', 'firstline', 'opening line', 'first words'],
+    ['identifiers', 'identifier'],
+    ['themes', 'theme'],
+    ['considerations', 'consideration'],
+    ['link to play', 'play link']
+  ];
 
-  const hasPlayName = hasAnyHeader_(headers, [
-    'play mono link',
-    'playmonolink',
-    'file play name',
-    'file name',
-    'play name',
-    'title',
-    'play title'
-  ]);
-
-  const hasCharacter = hasAnyHeader_(headers, [
-    'character',
-    'character name'
-  ]);
-
-  const hasFirstLine = hasAnyHeader_(headers, [
-    'first line',
-    'firstline',
-    'opening line',
-    'first words'
-  ]);
-
-  /*
-   * Require the four columns that identify a real monologue database row.
-   * Do NOT require annotation columns, because some legitimate database
-   * tabs may not have every optional note column.
-   */
-  return hasPlaywright && hasPlayName && hasCharacter && hasFirstLine;
+  return allowedHeadersByColumn.every(function(allowedHeaders, index) {
+    return hasAnyHeader_([headers[index]], allowedHeaders);
+  });
 }
 
 
@@ -4223,15 +4064,16 @@ function findCurrentReviewPair_(ss, originalPair) {
     return null;
   }
 
-  const first = findReviewRowBySignature_(
+  const firstMatches = findReviewRowsBySignature_(
     sheet,
     originalPair.first.signature
   );
 
-  const second = findReviewRowBySignature_(
-    sheet,
-    originalPair.second.signature
-  );
+  const secondMatches = originalPair.first.signature === originalPair.second.signature
+    ? firstMatches.slice(1)
+    : findReviewRowsBySignature_(sheet, originalPair.second.signature);
+  const first = firstMatches[0];
+  const second = secondMatches[0];
 
   if (!first || !second || first.rowNumber === second.rowNumber) {
     return null;
@@ -4245,31 +4087,33 @@ function findCurrentReviewPair_(ss, originalPair) {
 }
 
 
-function findReviewRowBySignature_(sheet, signature) {
+function findReviewRowsBySignature_(sheet, signature) {
   const lastRow = sheet.getLastRow();
 
   if (lastRow < 2) {
-    return null;
+    return [];
   }
 
   const values = sheet
     .getRange(2, 1, lastRow - 1, 8)
     .getDisplayValues();
 
+  const matches = [];
+
   for (let index = 0; index < values.length; index++) {
     if (makeReviewRowSignature_(values[index]) === signature) {
-      return {
+      matches.push({
         sheet: sheet,
         sheetName: sheet.getName(),
         rowNumber: index + 2,
         title: String(values[index][1] == null ? '' : values[index][1]).trim(),
         values: values[index],
         signature: signature
-      };
+      });
     }
   }
 
-  return null;
+  return matches;
 }
 
 
