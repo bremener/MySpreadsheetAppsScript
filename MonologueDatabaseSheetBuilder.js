@@ -12,6 +12,20 @@
 const FOLDER_ID = '1b6Uqq3W17iKuAVs9SPoCooBF444RnCyY';
 const SPREADSHEET_ID = '';
 
+/*
+ * UPDATE THIS VALUE BEFORE EACH NEW BATCH.
+ *
+ * The New Entries scanner processes only Google Docs created or uploaded
+ * to Drive AFTER this date/time.
+ *
+ * Use an explicit timezone offset.
+ * Examples:
+ *   Eastern Daylight Time:  -04:00
+ *   Eastern Standard Time:  -05:00
+ */
+const PROCESS_FILES_CREATED_AFTER = '2026-10-12T20:00:00-04:00';
+const NEW_ENTRIES_SHEET_NAME = 'New Entries';
+
 const CONFIG = {
   VISIBLE_COLUMNS: [
     'Playwright',
@@ -38,8 +52,9 @@ const CONFIG = {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Monologue Database')
+    .addItem('Scan folder for New Entries after cutoff','buildNewEntriesFromCutoff')
+    .addItem('Preview New Entries cutoff','previewNewEntriesCutoff')
     .addItem('Scan folder for new entries', 'buildMonologueDatabase')
-    
     .addItem('Scan all folder files safely', 'forceFullMonologueRescan')
     .addSeparator()
     .addItem('Import Manual Entries', 'importManualEntries')
@@ -4216,5 +4231,487 @@ function copyMissingAnnotationsBeforeDelete_(
           false
         );
     }
+  }
+}/*
+ * ============================================================
+ * NEW ENTRIES SCANNER — MANUAL CUTOFF VERSION
+ * ============================================================
+ *
+ * Purpose:
+ * - Scans FOLDER_ID for Google Docs created/uploaded after
+ *   PROCESS_FILES_CREATED_AFTER.
+ * - Parses eligible Google Docs using the existing monologue parser.
+ * - Appends candidates to the "New Entries" tab.
+ * - Does NOT write to database tabs.
+ * - Does NOT delete or modify existing database rows.
+ *
+ * New Entries uses the same A:J layout as Manual Entries:
+ * A:H database fields | I Category | J Import Status
+ *
+ * After reviewing New Entries:
+ * 1. Copy approved A:H values.
+ * 2. Paste them into Manual Entries.
+ * 3. Add a Category in Manual Entries column I.
+ * 4. Run "Import Manual Entries" in the working database sheet.
+ * ============================================================
+ */
+
+/**
+ * Returns true only for files created or uploaded to Drive after the
+ * manually configured cutoff.
+ */
+function isAfterManualCutoff_(file) {
+  const cutoff = new Date(PROCESS_FILES_CREATED_AFTER);
+  const created = file.getDateCreated();
+
+  return created > cutoff;
+}
+
+
+/**
+ * Main command: scans the configured folder for newly created/uploaded
+ * Google Docs and appends parsed candidates to New Entries.
+ */
+function buildNewEntriesFromCutoff() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    validateFolderId_();
+
+    const ss = getDestinationSpreadsheet_();
+    const rootFolder = DriveApp.getFolderById(FOLDER_ID);
+    const rootFolderName = rootFolder.getName();
+    const cutoff = new Date(PROCESS_FILES_CREATED_AFTER);
+
+    if (isNaN(cutoff.getTime())) {
+      throw new Error(
+        'PROCESS_FILES_CREATED_AFTER is not a valid date/time: "' +
+        PROCESS_FILES_CREATED_AFTER +
+        '"'
+      );
+    }
+
+    const newEntriesSheet = getOrCreateSheet_(
+      ss,
+      NEW_ENTRIES_SHEET_NAME
+    );
+
+    ensureNewEntriesHeaders_(newEntriesSheet);
+
+    const existingDocumentIds =
+      getNewEntriesDocumentIds_(newEntriesSheet);
+
+    const rowsToAdd = [];
+    const skippedFiles = [];
+    const processedDocumentIds = new Set();
+
+    const totals = {
+      eligibleFiles: 0,
+      newCandidates: 0,
+      alreadyInNewEntries: 0,
+      duplicateInRun: 0,
+      unsupported: 0,
+      review: 0,
+      categoryFolders: 0
+    };
+
+    const categoryFolders = rootFolder.getFolders();
+
+    while (categoryFolders.hasNext()) {
+      const categoryFolder = categoryFolders.next();
+      const categoryName = makeSafeTabName_(
+        categoryFolder.getName()
+      );
+
+      totals.categoryFolders++;
+
+      const filesToProcess = collectNewFilesRecursively_(
+        categoryFolder,
+        categoryFolder.getName(),
+        cutoff
+      );
+
+      totals.eligibleFiles += filesToProcess.length;
+
+      filesToProcess.forEach(function (item) {
+        try {
+          const resolvedFile = resolveGoogleDocFile_(item.file);
+
+          if (!resolvedFile) {
+            skippedFiles.push({
+              rootFolder: rootFolderName,
+              sourceFolder: item.sourceFolder,
+              fileName: item.file.getName(),
+              fileUrl: item.file.getUrl(),
+              reason:
+                'Not a native Google Doc or shortcut to a Google Doc'
+            });
+
+            totals.unsupported++;
+            return;
+          }
+
+          const documentId = resolvedFile.getId();
+
+          /*
+           * A Google Doc reachable through multiple shortcuts is added
+           * only once during this run.
+           */
+          if (processedDocumentIds.has(documentId)) {
+            totals.duplicateInRun++;
+            return;
+          }
+
+          processedDocumentIds.add(documentId);
+
+          /*
+           * Prevents re-adding a Google Doc that is already represented
+           * in New Entries through its Column B source link.
+           */
+          if (existingDocumentIds.has(documentId)) {
+            totals.alreadyInNewEntries++;
+            return;
+          }
+
+          const info = readMonologueHeader_(resolvedFile);
+
+          const candidateValues = [
+            info.playwright,
+            resolvedFile.getName(),
+            info.character,
+            info.firstLine,
+            '',
+            '',
+            '',
+            ''
+          ];
+
+          if (!hasRequiredIdentityFields_(candidateValues)) {
+            skippedFiles.push({
+              rootFolder: rootFolderName,
+              sourceFolder: item.sourceFolder,
+              fileName: resolvedFile.getName(),
+              fileUrl: resolvedFile.getUrl(),
+              reason:
+                'Could not obtain Playwright, Character, and First Line'
+            });
+
+            totals.review++;
+            return;
+          }
+
+          rowsToAdd.push({
+            values: candidateValues,
+            documentUrl: resolvedFile.getUrl(),
+            category: categoryName
+          });
+
+          totals.newCandidates++;
+        } catch (error) {
+          skippedFiles.push({
+            rootFolder: rootFolderName,
+            sourceFolder: item.sourceFolder,
+            fileName: item.file.getName(),
+            fileUrl: item.file.getUrl(),
+            reason:
+              error && error.message
+                ? error.message
+                : String(error)
+          });
+
+          totals.review++;
+        }
+      });
+    }
+
+    appendNewEntriesRows_(
+      newEntriesSheet,
+      rowsToAdd
+    );
+
+    updateSkippedFilesSheet_(ss, skippedFiles);
+
+    SpreadsheetApp.flush();
+
+    showMessage_(
+      'New Entries scan complete.\n\n' +
+      'Cutoff: ' + cutoff.toLocaleString() + '\n' +
+      'Category folders scanned: ' + totals.categoryFolders + '\n' +
+      'Eligible files found: ' + totals.eligibleFiles + '\n' +
+      'New candidate rows added: ' + totals.newCandidates + '\n' +
+      'Already represented in New Entries: ' +
+        totals.alreadyInNewEntries + '\n' +
+      'Duplicate references within this run: ' +
+        totals.duplicateInRun + '\n' +
+      'Unsupported files: ' + totals.unsupported + '\n' +
+      'Skipped or needs review: ' + totals.review + '\n\n' +
+      'Review New Entries, then copy approved A:H values into ' +
+      'Manual Entries.'
+    );
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+/**
+ * Collects Google Docs and shortcuts created/uploaded after the cutoff.
+ *
+ * Unlike collectFilesRecursively_, this filters by getDateCreated(),
+ * which reflects when a file entered Drive rather than when it was last
+ * edited.
+ */
+function collectNewFilesRecursively_(folder, relativePath, cutoff) {
+  const filesToProcess = [];
+  const stack = [{
+    folder: folder,
+    relativePath: relativePath
+  }];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+
+    const currentPath = current.relativePath === ''
+      ? current.folder.getName()
+      : current.relativePath;
+
+    const files = current.folder.getFiles();
+
+    while (files.hasNext()) {
+      const file = files.next();
+
+      if (!isAfterManualCutoff_(file)) {
+        continue;
+      }
+
+      const mimeType = file.getMimeType();
+
+      if (
+        mimeType !== MimeType.GOOGLE_DOCS &&
+        mimeType !== MimeType.SHORTCUT
+      ) {
+        continue;
+      }
+
+      filesToProcess.push({
+        file: file,
+        sourceFolder: currentPath
+      });
+    }
+
+    const subfolders = current.folder.getFolders();
+    const nestedFolders = [];
+
+    while (subfolders.hasNext()) {
+      const subfolder = subfolders.next();
+
+      nestedFolders.push({
+        folder: subfolder,
+        relativePath:
+          currentPath + ' / ' + subfolder.getName()
+      });
+    }
+
+    for (let index = nestedFolders.length - 1; index >= 0; index--) {
+      stack.push(nestedFolders[index]);
+    }
+  }
+
+  return filesToProcess;
+}
+
+
+/**
+ * Ensures New Entries has the exact A1:J1 headers expected by the
+ * Manual Entries workflow.
+ */
+function ensureNewEntriesHeaders_(sheet) {
+  const expectedHeaders = CONFIG.VISIBLE_COLUMNS.concat([
+    'Category',
+    'Import Status'
+  ]);
+
+  const headerRange = sheet.getRange(
+    1,
+    1,
+    1,
+    expectedHeaders.length
+  );
+
+  const headers = headerRange
+    .getDisplayValues()[0]
+    .map(cleanText_);
+
+  const headersAreBlank = headers.every(function (header) {
+    return header === '';
+  });
+
+  if (headersAreBlank) {
+    headerRange.setValues([expectedHeaders]);
+    return;
+  }
+
+  const headersMatch = expectedHeaders.every(function (
+    expectedHeader,
+    index
+  ) {
+    return headers[index] === expectedHeader;
+  });
+
+  if (!headersMatch) {
+    throw new Error(
+      'The "' + NEW_ENTRIES_SHEET_NAME +
+      '" tab must have these exact A1:J1 headers:\n\n' +
+      expectedHeaders.join(' | ') +
+      '\n\nNo new entries were scanned.'
+    );
+  }
+}
+
+
+/**
+ * Reads Google Doc IDs from the rich-text links in New Entries Column B.
+ *
+ * This prevents the same source document from being appended again on a
+ * later run, even if its file creation date remains after the cutoff.
+ */
+function getNewEntriesDocumentIds_(sheet) {
+  const documentIds = new Set();
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < CONFIG.DATA_START_ROW) {
+    return documentIds;
+  }
+
+  const rowCount =
+    lastRow - CONFIG.DATA_START_ROW + 1;
+
+  const richTextValues = sheet
+    .getRange(CONFIG.DATA_START_ROW, 2, rowCount, 1)
+    .getRichTextValues();
+
+  richTextValues.forEach(function (richTextValue) {
+    const url = getFirstRichTextLinkUrl_(richTextValue);
+    const documentId = extractGoogleDocumentId_(url);
+
+    if (documentId !== '') {
+      documentIds.add(documentId);
+    }
+  });
+
+  return documentIds;
+}
+
+
+/**
+ * Appends candidate rows to New Entries.
+ *
+ * A:H contain the same fields as Manual Entries.
+ * I receives the immediate child-folder name as the Category.
+ * J is marked Ready for review.
+ *
+ * The source Google Doc URL is attached to the Column B label, matching
+ * the existing database scanner behavior.
+ */
+function appendNewEntriesRows_(sheet, candidates) {
+  if (!candidates || candidates.length === 0) {
+    return;
+  }
+
+  const startRow = sheet.getLastRow() + 1;
+
+  const values = candidates.map(function (candidate) {
+    return candidate.values.concat([
+      candidate.category,
+      'Ready'
+    ]);
+  });
+
+  sheet
+    .getRange(
+      startRow,
+      1,
+      values.length,
+      values[0].length
+    )
+    .setValues(values);
+
+  const richTextValues = candidates.map(function (candidate) {
+    const label = cleanText_(candidate.values[1]);
+    const url = cleanText_(candidate.documentUrl);
+
+    const builder = SpreadsheetApp.newRichTextValue();
+    builder.setText(label);
+
+    if (url !== '') {
+      builder.setLinkUrl(url);
+    }
+
+    return builder.build();
+  });
+
+  sheet
+    .getRange(startRow, 2, richTextValues.length, 1)
+    .setRichTextValues(richTextValues);
+}
+
+
+/**
+ * Optional diagnostic: reports which files the current cutoff would include,
+ * without parsing documents or changing New Entries.
+ */
+function previewNewEntriesCutoff() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    validateFolderId_();
+
+    const rootFolder = DriveApp.getFolderById(FOLDER_ID);
+    const cutoff = new Date(PROCESS_FILES_CREATED_AFTER);
+
+    if (isNaN(cutoff.getTime())) {
+      throw new Error(
+        'PROCESS_FILES_CREATED_AFTER is not a valid date/time.'
+      );
+    }
+
+    const countsByCategory = [];
+    let totalEligible = 0;
+
+    const categoryFolders = rootFolder.getFolders();
+
+    while (categoryFolders.hasNext()) {
+      const categoryFolder = categoryFolders.next();
+      const categoryName = makeSafeTabName_(
+        categoryFolder.getName()
+      );
+
+      const files = collectNewFilesRecursively_(
+        categoryFolder,
+        categoryFolder.getName(),
+        cutoff
+      );
+
+      totalEligible += files.length;
+
+      countsByCategory.push(
+        categoryName + ': ' + files.length
+      );
+    }
+
+    showMessage_(
+      'New Entries cutoff preview\n\n' +
+      'Cutoff: ' + cutoff.toLocaleString() + '\n\n' +
+      'Eligible files by category:\n' +
+      (countsByCategory.length > 0
+        ? countsByCategory.join('\n')
+        : 'None') +
+      '\n\nTotal eligible files: ' + totalEligible
+    );
+  } finally {
+    lock.releaseLock();
   }
 }
