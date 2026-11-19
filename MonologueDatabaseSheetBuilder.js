@@ -4316,6 +4316,95 @@ function buildNewEntriesFromCutoff() {
       categoryFolders: 0
     };
 
+    const rootFiles = collectImmediateFolderFiles_(
+      rootFolder,
+      rootFolder.getName(),
+      cutoff
+    );
+    totals.eligibleFiles += rootFiles.length;
+
+    rootFiles.forEach(function (item) {
+      try {
+        const resolvedFile = resolveGoogleDocFile_(item.file);
+
+        if (!resolvedFile) {
+          skippedFiles.push({
+            rootFolder: rootFolderName,
+            sourceFolder: item.sourceFolder,
+            fileName: item.file.getName(),
+            fileUrl: item.file.getUrl(),
+            reason:
+              'Not a native Google Doc or shortcut to a Google Doc'
+          });
+
+          totals.unsupported++;
+          return;
+        }
+
+        const documentId = resolvedFile.getId();
+
+        if (processedDocumentIds.has(documentId)) {
+          totals.duplicateInRun++;
+          return;
+        }
+
+        processedDocumentIds.add(documentId);
+
+        if (existingDocumentIds.has(documentId)) {
+          totals.alreadyInNewEntries++;
+          return;
+        }
+
+        const info = readMonologueHeader_(resolvedFile);
+
+        const candidateValues = [
+          info.playwright,
+          resolvedFile.getName(),
+          info.character,
+          info.firstLine,
+          '',
+          '',
+          '',
+          ''
+        ];
+
+        if (!hasRequiredIdentityFields_(candidateValues)) {
+          skippedFiles.push({
+            rootFolder: rootFolderName,
+            sourceFolder: item.sourceFolder,
+            fileName: resolvedFile.getName(),
+            fileUrl: resolvedFile.getUrl(),
+            reason:
+              'Could not obtain Playwright, Character, and First Line'
+          });
+
+          totals.review++;
+          return;
+        }
+
+        rowsToAdd.push({
+          values: candidateValues,
+          documentUrl: resolvedFile.getUrl(),
+          category: makeSafeTabName_(rootFolderName)
+        });
+
+        totals.newCandidates++;
+      } catch (error) {
+        skippedFiles.push({
+          rootFolder: rootFolderName,
+          sourceFolder: item.sourceFolder,
+          fileName: item.file.getName(),
+          fileUrl: item.file.getUrl(),
+          reason:
+            error && error.message
+              ? error.message
+              : String(error)
+        });
+
+        totals.review++;
+      }
+    });
+
     const categoryFolders = rootFolder.getFolders();
 
     while (categoryFolders.hasNext()) {
@@ -4462,6 +4551,36 @@ function buildNewEntriesFromCutoff() {
  * which reflects when a file entered Drive rather than when it was last
  * edited.
  */
+function collectImmediateFolderFiles_(folder, relativePath, cutoff) {
+  const filesToProcess = [];
+  const currentPath = relativePath === '' ? folder.getName() : relativePath;
+  const files = folder.getFiles();
+
+  while (files.hasNext()) {
+    const file = files.next();
+
+    if (!isAfterManualCutoff_(file)) {
+      continue;
+    }
+
+    const mimeType = file.getMimeType();
+
+    if (
+      mimeType !== MimeType.GOOGLE_DOCS &&
+      mimeType !== MimeType.SHORTCUT
+    ) {
+      continue;
+    }
+
+    filesToProcess.push({
+      file: file,
+      sourceFolder: currentPath
+    });
+  }
+
+  return filesToProcess;
+}
+
 function collectNewFilesRecursively_(folder, relativePath, cutoff) {
   const filesToProcess = [];
   const stack = [{
@@ -4592,8 +4711,8 @@ function getNewEntriesDocumentIds_(sheet) {
     .getRange(CONFIG.DATA_START_ROW, 2, rowCount, 1)
     .getRichTextValues();
 
-  richTextValues.forEach(function (richTextValue) {
-    const url = getFirstRichTextLinkUrl_(richTextValue);
+ richTextValues.forEach(function (row) {
+  const url = getFirstRichTextLinkUrl_(row[0]);
     const documentId = extractGoogleDocumentId_(url);
 
     if (documentId !== '') {
@@ -4616,45 +4735,21 @@ function getNewEntriesDocumentIds_(sheet) {
  * the existing database scanner behavior.
  */
 function appendNewEntriesRows_(sheet, candidates) {
-  if (!candidates || candidates.length === 0) {
-    return;
-  }
-
-  const startRow = sheet.getLastRow() + 1;
-
-  const values = candidates.map(function (candidate) {
-    return candidate.values.concat([
-      candidate.category,
-      'Ready'
-    ]);
+  if (!candidates || candidates.length === 0) return;
+  const startRow = Math.max(CONFIG.DATA_START_ROW, sheet.getLastRow() + 1);
+  ensureSheetHasRow_(sheet, startRow + candidates.length - 1);
+  const values = candidates.map(function(candidate) {
+    return candidate.values.concat([candidate.category, 'Ready']);
   });
-
-  sheet
-    .getRange(
-      startRow,
-      1,
-      values.length,
-      values[0].length
-    )
-    .setValues(values);
-
-  const richTextValues = candidates.map(function (candidate) {
+  const richTextRows = candidates.map(function(candidate) {
     const label = cleanText_(candidate.values[1]);
     const url = cleanText_(candidate.documentUrl);
-
-    const builder = SpreadsheetApp.newRichTextValue();
-    builder.setText(label);
-
-    if (url !== '') {
-      builder.setLinkUrl(url);
-    }
-
-    return builder.build();
+    const builder = SpreadsheetApp.newRichTextValue().setText(label);
+    if (url !== '') builder.setLinkUrl(url);
+    return [builder.build()];
   });
-
-  sheet
-    .getRange(startRow, 2, richTextValues.length, 1)
-    .setRichTextValues(richTextValues);
+  sheet.getRange(startRow, 1, values.length, 10).setValues(values);
+  sheet.getRange(startRow, 2, richTextRows.length, 1).setRichTextValues(richTextRows);
 }
 
 
@@ -4680,6 +4775,16 @@ function previewNewEntriesCutoff() {
 
     const countsByCategory = [];
     let totalEligible = 0;
+
+    const rootFiles = collectImmediateFolderFiles_(
+      rootFolder,
+      rootFolder.getName(),
+      cutoff
+    );
+    totalEligible += rootFiles.length;
+    countsByCategory.push(
+      rootFolder.getName() + ' (root): ' + rootFiles.length
+    );
 
     const categoryFolders = rootFolder.getFolders();
 
